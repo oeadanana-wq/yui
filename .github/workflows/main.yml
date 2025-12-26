@@ -10,29 +10,53 @@ jobs:
 
     steps:
       - name: Enable RDP
+        shell: powershell
         run: |
-          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+          Write-Host "Enabling RDP..."
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" `
+            /v fDenyTSConnections /t REG_DWORD /d 0 /f
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
       - name: Set password for runner user
+        shell: powershell
         run: |
           $password = "Amirul10021996@#$!"
           net user runneradmin $password
+
           echo "RDP_USER=runneradmin" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Install Tailscale
+      - name: Install Tailscale (MSI - Stable)
+        shell: powershell
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          iwr https://tailscale.com/install.ps1 -useb | iex
-          tailscale up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=gh-win-${{ github.run_id }}
+          Write-Host "Downloading Tailscale MSI..."
+          $msi = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest `
+            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" `
+            -OutFile $msi
+
+          Write-Host "Installing Tailscale..."
+          Start-Process msiexec.exe -Wait `
+            -ArgumentList "/i `"$msi`" /quiet /norestart"
+
+          Write-Host "Starting Tailscale..."
+          & "C:\Program Files\Tailscale\tailscale.exe" up `
+            --authkey=$env:TAILSCALE_AUTH_KEY `
+            --hostname=gh-win-${{ github.run_id }}
 
       - name: Wait for Tailscale IP
+        shell: powershell
         run: |
-          $ip=""
-          for ($i=0; $i -lt 12; $i++) {
-            $ip = (tailscale ip -4)
+          Write-Host "Waiting for Tailscale IP..."
+          $ip = ""
+
+          for ($i = 0; $i -lt 12; $i++) {
+            try {
+              $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+            } catch {}
             if ($ip) { break }
             Start-Sleep -Seconds 5
           }
@@ -44,16 +68,21 @@ jobs:
           }
 
       - name: Show RDP info & keep alive
+        shell: powershell
         run: |
-          echo "=============================="
-          echo " WINDOWS RDP READY"
-          echo " Address : $env:TAILSCALE_IP"
-          echo " User    : $env:RDP_USER"
-          echo " Pass    : $env:RDP_PASS"
-          echo "=============================="
-          echo "Cancel workflow to stop RDP"
+          Write-Host ""
+          Write-Host "===================================="
+          Write-Host "   WINDOWS RDP VIA TAILSCALE READY"
+          Write-Host "------------------------------------"
+          Write-Host " Address : $env:TAILSCALE_IP"
+          Write-Host " User    : $env:RDP_USER"
+          Write-Host " Pass    : $env:RDP_PASS"
+          Write-Host "------------------------------------"
+          Write-Host " Stop RDP: Actions -> Cancel workflow"
+          Write-Host "===================================="
+          Write-Host ""
 
           while ($true) {
-            Write-Host "$(Get-Date) RDP Active"
+            Write-Host "$(Get-Date) RDP ACTIVE"
             Start-Sleep -Seconds 300
           }
