@@ -1,95 +1,59 @@
-name: RDP (Ubuntu)
+name: RDP (Windows)
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
-    runs-on: ubuntu-22.04
+  windows-rdp:
+    runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Checkout (no-op)
-        uses: actions/checkout@v4
-
-      - name: Install XFCE and xrdp
+      - name: Enable RDP
         run: |
-          sudo apt update -y
-          # Install lightweight desktop (XFCE) and xrdp
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y xfce4 xfce4-goodies xorg xrdp
-          # Ensure xrdp uses xfce session for incoming RDP
-          echo xfce4-session | sudo tee /etc/skel/.xsession > /dev/null
-          sudo mkdir -p /etc/xrdp
-          echo "startxfce4" | sudo tee /etc/xrdp/startwm.sh > /dev/null
-          sudo chmod +x /etc/xrdp/startwm.sh
-          sudo systemctl enable xrdp
-          sudo systemctl restart xrdp
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: Create RDP user and set password
-        env:
-          GITHUB_ENV: ${{ github.env }}
+      - name: Set password for runner user
         run: |
-          PASSWORD='Amirul10021996@#$!'
-
-          # Create user if not exists, otherwise reset password
-          if id -u RDP >/dev/null 2>&1; then
-            echo "RDP user exists — resetting password"
-            echo "RDP:${PASSWORD}" | sudo chpasswd
-          else
-            echo "Creating RDP user"
-            sudo useradd -m -s /bin/bash RDP
-            echo "RDP:${PASSWORD}" | sudo chpasswd
-          fi
-
-          # Add to sudoers and xrdp/ssl-cert groups so session works
-          sudo usermod -aG sudo,ssl-cert,xrdp RDP || true
-          # Disable password expiry
-          sudo chage -I -1 -m 0 -M 99999 -E -1 RDP || true
-
-          # Export creds to GitHub environment so later steps can read
-          echo "RDP_CREDS=User: RDP | Password: ${PASSWORD}" >> $GITHUB_ENV
+          $password = "Amirul10021996@#$!"
+          net user runneradmin $password
+          echo "RDP_USER=runneradmin" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # Install Tailscale (official script)
-          curl -fsSL https://tailscale.com/install.sh | sudo sh
-          sudo tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=gh-runner-${{ github.run_id }} || true
+          iwr https://tailscale.com/install.ps1 -useb | iex
+          tailscale up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=gh-win-${{ github.run_id }}
 
       - name: Wait for Tailscale IP
         run: |
-          retries=0
-          tsip=""
-          while [ -z "$tsip" ] && [ $retries -lt 12 ]; do
-            tsip=$(tailscale ip -4 2>/dev/null | head -n1 || true)
-            if [ -n "$tsip" ]; then break; fi
-            retries=$((retries+1))
-            sleep 5
-          done
+          $ip=""
+          for ($i=0; $i -lt 12; $i++) {
+            $ip = (tailscale ip -4)
+            if ($ip) { break }
+            Start-Sleep -Seconds 5
+          }
 
-          if [ -z "$tsip" ]; then
-            echo "TAILSCALE_IP=" >> $GITHUB_ENV
-            echo "No Tailscale IP assigned"
-          else
-            echo "TAILSCALE_IP=$tsip" >> $GITHUB_ENV
-          fi
+          if ($ip) {
+            echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+          } else {
+            echo "TAILSCALE_IP=NOT_FOUND" >> $env:GITHUB_ENV
+          }
 
-      - name: Verify xrdp listening
+      - name: Show RDP info & keep alive
         run: |
-          # Check xrdp is listening on 3389
-          ss -tlnp | grep ":3389" || true
-          sudo systemctl status xrdp --no-pager || true
+          echo "=============================="
+          echo " WINDOWS RDP READY"
+          echo " Address : $env:TAILSCALE_IP"
+          echo " User    : $env:RDP_USER"
+          echo " Pass    : $env:RDP_PASS"
+          echo "=============================="
+          echo "Cancel workflow to stop RDP"
 
-      - name: Output connection info and keep alive
-        run: |
-          echo "\n=== RDP ACCESS ==="
-          echo "Address (Tailscale): ${{ env.TAILSCALE_IP }}"
-          cat $GITHUB_ENV | grep RDP_CREDS || true
-          echo "==================\n"
-
-          # Keep the runner alive until manually cancelled. Note: GitHub-hosted runners may not accept inbound RDP connections.
-          while true; do
-            echo "["$(date) "] RDP Active - use Actions -> Cancel workflow to terminate"
-            sleep 300
-          done
+          while ($true) {
+            Write-Host "$(Get-Date) RDP Active"
+            Start-Sleep -Seconds 300
+          }
